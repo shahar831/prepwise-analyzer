@@ -119,7 +119,7 @@ def run_model_and_generate_output(df: pd.DataFrame) -> dict:
     image_uris = []
 
     # גרף 1: המשקלים החדשים
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(18, 12))
     sns.barplot(data=results_df, y="ParameterName", x="NewWeight")
     plt.title("🔧 Recommended New Weights")
     plt.tight_layout()
@@ -147,7 +147,7 @@ def run_model_and_generate_output(df: pd.DataFrame) -> dict:
     ])
     melted = comparison_df.melt(id_vars="Parameter", var_name="Type", value_name="Weight")
 
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(18, 12))
     sns.barplot(data=melted, y="Parameter", x="Weight", hue="Type")
     plt.title("⚖️ Current vs Recommended Weights")
     plt.tight_layout()
@@ -157,7 +157,7 @@ def run_model_and_generate_output(df: pd.DataFrame) -> dict:
     plt.close()
 
     # גרף 3: Feature importance לפי המודל
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(18, 12))
     top_features = feature_importance.copy()
     top_features["AbsImportance"] = top_features["Importance"].abs()
     top_features = top_features.sort_values("AbsImportance", ascending=False).head(10)
