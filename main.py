@@ -1,35 +1,41 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pandas as pd
+import numpy as np
+from io import BytesIO
 import matplotlib.pyplot as plt
 import seaborn as sns
 import base64
-from io import BytesIO
+import traceback
+
+from model_logic import run_model_and_generate_output
 
 app = FastAPI()
 
+# ✅ CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # או ["http://localhost:8081"] רק לסביבת הפיתוח שלך
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.post("/process")
-async def process(file: UploadFile = File(...)):
+async def process_csv(file: UploadFile = File(...)):
     try:
-        # קריאת הקובץ
         contents = await file.read()
         df = pd.read_csv(BytesIO(contents))
-
-        # ניתוח (דוגמה בסיסית)
-        summary = df.describe().to_string()
-
-        # גרף לדוגמה
-        plt.figure(figsize=(6, 4))
-        sns.histplot(df[df.columns[0]])
-        buf = BytesIO()
-        plt.savefig(buf, format="png")
-        buf.seek(0)
-        graph_base64 = base64.b64encode(buf.read()).decode("utf-8")
-
-        return JSONResponse({
-            "summary": summary,
-            "graph": graph_base64
-        })
+        
+        # ⏬ תריץ את הפונקציה הראשית (תעביר את df פנימה)
+        result = run_model_and_generate_output(df)
+        
+        return JSONResponse(content=result)
 
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(
+            content={"error": str(e), "trace": traceback.format_exc()},
+            status_code=500
+        )
