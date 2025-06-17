@@ -5,4 +5,8 @@ numpy
 matplotlib
 seaborn
 scikit-learn
+joblib
+plotly
+aiofiles
+httpx
 python-multipart
