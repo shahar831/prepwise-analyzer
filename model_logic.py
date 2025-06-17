@@ -3,24 +3,25 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.inspection import permutation_importance
 import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 import base64
 import warnings
+
 warnings.filterwarnings('ignore')
 
-
 def run_model_and_generate_output(df: pd.DataFrame) -> dict:
-    # שלב 1: ניקוי והכנה
+    # ===== 1. Feature Engineering =====
     feature_columns = [
         'LanguageMatch', 'GenderMatch', 'CompanyMatch', 'CareerFieldMatch',
         'RoleMatch', 'SocialStyleMatch', 'GuidanceStyleMatch',
         'CommunicationStyleMatch', 'LearningStyleMatch', 'ExperienceLevelMatch',
         'LanguageImportant', 'GenderImportant', 'CompanyImportant'
     ]
+
     df[feature_columns] = df[feature_columns].fillna(0)
 
     df['LanguageMatch_Important'] = df['LanguageMatch'] * df['LanguageImportant']
@@ -33,112 +34,123 @@ def run_model_and_generate_output(df: pd.DataFrame) -> dict:
     X = df[extended_features].copy()
     y = df['Success'].copy()
 
-    # שלב 2: חלוקה ל־Train/Test
     if len(df) > 10 and len(y.unique()) > 1:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
     else:
         X_train, X_test, y_train, y_test = X, X, y, y
 
-    # שלב 3: סקלינג ואימון
+    # ===== 2. Scaling + Model Training =====
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    class_weight = 'balanced' if len(y.unique()) > 1 and y.mean() not in [0, 1] else None
-    lr_model = LogisticRegression(max_iter=1000, class_weight=class_weight, solver='liblinear')
+    class_weight = 'balanced' if len(y.unique()) > 1 else None
+    model = LogisticRegression(max_iter=1000, class_weight=class_weight, solver='liblinear')
 
     try:
-        lr_model.fit(X_train_scaled, y_train)
-        y_pred = lr_model.predict(X_test_scaled)
-        y_pred_proba = lr_model.predict_proba(X_test_scaled)[:, 1]
-        accuracy = accuracy_score(y_test, y_pred)
-        auc_score = roc_auc_score(y_test, y_pred_proba) if len(y_test.unique()) > 1 else None
+        model.fit(X_train_scaled, y_train)
+        y_pred = model.predict(X_test_scaled)
+        y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
 
-        feature_importance = pd.DataFrame({
-            'Feature': extended_features,
-            'Importance': lr_model.coef_[0]
-        })
+        accuracy = accuracy_score(y_test, y_pred)
+        auc = roc_auc_score(y_test, y_pred_proba) if len(y_test.unique()) > 1 else None
+
+        importance = pd.DataFrame({'Feature': extended_features, 'Importance': model.coef_[0]})
 
         if len(X_test) > 1 and len(y_test.unique()) > 1:
-            perm_importance = permutation_importance(
-                lr_model, X_test_scaled, y_test,
-                n_repeats=min(10, max(2, len(X_test) // 10)),
-                random_state=42, scoring='accuracy'
-            )
-            feature_importance['Importance'] = perm_importance.importances_mean
+            perm = permutation_importance(model, X_test_scaled, y_test, scoring='accuracy',
+                                          n_repeats=10, random_state=42)
+            importance['Importance'] = perm.importances_mean
+    except Exception:
+        importance = pd.DataFrame({'Feature': extended_features,
+                                   'Importance': np.random.rand(len(extended_features)) * 0.001})
 
-    except Exception as e:
-        feature_importance = pd.DataFrame({
-            'Feature': extended_features,
-            'Importance': np.random.random(len(extended_features)) * 0.001
-        })
+    # ===== 3. Calculate Weights =====
+    feature_to_param = {
+        'LanguageMatch': 'Language', 'LanguageImportant': 'LanguageImportant',
+        'LanguageMatch_Important': 'LanguageImportant', 'GenderMatch': 'Gender',
+        'GenderImportant': 'GenderImportant', 'GenderMatch_Important': 'GenderImportant',
+        'CareerFieldMatch': 'CareerField', 'CompanyMatch': 'Company',
+        'CompanyImportant': 'CompanyImportant', 'CompanyMatch_Important': 'CompanyImportant',
+        'SocialStyleMatch': 'SocialStyle', 'GuidanceStyleMatch': 'GuidanceStyle',
+        'CommunicationStyleMatch': 'CommunicationStyle',
+        'LearningStyleMatch': 'LearningStyle', 'RoleMatch': 'Role',
+        'ExperienceLevelMatch': 'JobExperienceLevel'
+    }
 
-    # שלב 4: חישוב משקלים חדשים
-    def calculate_new_weights(importance_df):
-        feature_to_param = {
-            'LanguageMatch': 'Language',
-            'LanguageImportant': 'LanguageImportant',
-            'LanguageMatch_Important': 'LanguageImportant',
-            'GenderMatch': 'Gender',
-            'GenderImportant': 'GenderImportant',
-            'GenderMatch_Important': 'GenderImportant',
-            'CareerFieldMatch': 'CareerField',
-            'CompanyMatch': 'Company',
-            'CompanyImportant': 'CompanyImportant',
-            'CompanyMatch_Important': 'CompanyImportant',
-            'SocialStyleMatch': 'SocialStyle',
-            'GuidanceStyleMatch': 'GuidanceStyle',
-            'CommunicationStyleMatch': 'CommunicationStyle',
-            'LearningStyleMatch': 'LearningStyle',
-            'RoleMatch': 'Role',
-            'ExperienceLevelMatch': 'JobExperienceLevel'
-        }
+    param_weights = {}
+    for _, row in importance.iterrows():
+        feature = row['Feature']
+        importance_val = max(0, abs(row['Importance']))
+        param = feature_to_param.get(feature)
+        if param:
+            param_weights[param] = param_weights.get(param, 0) + importance_val
 
-        param_importance = {}
-        for _, row in importance_df.iterrows():
-            feature = row['Feature']
-            importance = max(0, abs(row['Importance']))
-            if feature in feature_to_param:
-                param = feature_to_param[feature]
-                param_importance[param] = param_importance.get(param, 0) + importance
+    # Normalize
+    epsilon = 1e-9
+    total = sum(param_weights.values()) + epsilon
+    normalized_weights = {k: v / total for k, v in param_weights.items()}
 
-        epsilon = 1e-9
-        for param in param_importance:
-            param_importance[param] += epsilon
-        total = sum(param_importance.values())
-        normalized = {param: importance / total for param, importance in param_importance.items()}
-        return normalized
+    # ===== 4. Generate CSV =====
+    results_df = pd.DataFrame([{'ParameterName': k, 'NewWeight': round(v, 3)}
+                               for k, v in normalized_weights.items()]).sort_values('NewWeight', ascending=False)
+    results_df.to_csv("new_weights_recommendations.csv", index=False)
 
-    new_weights = calculate_new_weights(feature_importance)
-    results_df = pd.DataFrame([{'ParameterName': k, 'NewWeight': round(v, 3)} for k, v in new_weights.items()])
-    results_df = results_df.sort_values(by='NewWeight', ascending=False)
+    # ===== 5. Prepare Comparison Plot =====
+    current_weights = {
+        'Language': 0.2, 'LanguageImportant': 0.3, 'Gender': 0.15,
+        'GenderImportant': 0.23, 'CareerField': 0.25, 'Company': 0.1,
+        'CompanyImportant': 0.15, 'SocialStyle': 0.08, 'GuidanceStyle': 0.08,
+        'CommunicationStyle': 0.07, 'LearningStyle': 0.07, 'Role': 0.2,
+        'JobExperienceLevel': 0.06
+    }
 
-    # שלב 5: גרפים
-    plt.figure(figsize=(10, 8))
+    comparison_df = pd.DataFrame([{
+        'Parameter': key,
+        'Current': current_weights.get(key, 0),
+        'New': normalized_weights.get(key, 0)
+    } for key in sorted(set(list(current_weights.keys()) + list(normalized_weights.keys())))])
+
+    # ===== 6. Create Graphs =====
+    image_uris = []
+
+    # First plot: new weights
+    plt.figure(figsize=(8, 6))
     sns.barplot(data=results_df, y='ParameterName', x='NewWeight')
-    plt.title('Recommended New Weights')
-    plt.tight_layout()
-
+    plt.title("🔧 Recommended New Weights")
     buf = io.BytesIO()
+    plt.tight_layout()
     plt.savefig(buf, format='png')
-    buf.seek(0)
-    image_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    buf.close()
+    image_uris.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
     plt.close()
 
-    summary = f"Model trained on {len(df)} samples.\n"
-    if 'accuracy' in locals():
-        summary += f"Accuracy: {accuracy:.3f}\n"
-    if 'auc_score' in locals() and auc_score is not None:
-        summary += f"AUC Score: {auc_score:.3f}\n"
-    summary += "Top weights:\n"
+    # Second plot: comparison
+    melted = comparison_df.melt(id_vars='Parameter', var_name='Type', value_name='Weight')
+    plt.figure(figsize=(10, 8))
+    sns.barplot(data=melted, y='Parameter', x='Weight', hue='Type')
+    plt.title("⚖️ Current vs Recommended Weights")
+    buf = io.BytesIO()
+    plt.tight_layout()
+    plt.savefig(buf, format='png')
+    image_uris.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
+    plt.close()
+
+    # ===== 7. Read CSV for client
+    with open("new_weights_recommendations.csv", "rb") as f:
+        csv_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+    # ===== 8. Summary string
+    summary = f"Model trained on {len(df)} rows.\n"
+    if 'accuracy' in locals(): summary += f"Accuracy: {accuracy:.3f}\n"
+    if 'auc' in locals() and auc is not None: summary += f"AUC Score: {auc:.3f}\n"
+
+    summary += "\nTop 3 parameters:\n"
     for _, row in results_df.head(3).iterrows():
         summary += f"- {row['ParameterName']}: {row['NewWeight']}\n"
 
     return {
-        "graph": image_base64,
+        "graphList": image_uris,  # base64 list of graphs
         "summary": summary,
-        "weights": results_df.to_dict(orient="records")
+        "weights": results_df.to_dict(orient="records"),
+        "csv_base64": csv_base64
     }
